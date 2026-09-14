@@ -1,0 +1,308 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Secure static website delivery infrastructure for CloudPipe using a private
+  Amazon S3 origin, Amazon CloudFront, Origin Access Control, and a
+  repository-bound GitHub Actions OIDC deployment role.
+
+Parameters:
+  GitHubOwner:
+    Type: String
+    Default: thecloudengineer2026
+    Description: GitHub repository owner name.
+
+  GitHubOwnerId:
+    Type: String
+    Default: "251927612"
+    AllowedPattern: "^[0-9]+$"
+    Description: Immutable GitHub repository owner ID.
+
+  GitHubRepository:
+    Type: String
+    Default: cloudpipe-deploy
+    Description: GitHub repository name.
+
+  GitHubRepositoryId:
+    Type: String
+    Default: "1369242946"
+    AllowedPattern: "^[0-9]+$"
+    Description: Immutable GitHub repository ID.
+
+  GitHubBranch:
+    Type: String
+    Default: main
+    AllowedPattern: "^[A-Za-z0-9._/-]+$"
+    Description: Only this branch may assume the AWS deployment role.
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      Tags:
+        - Key: Project
+          Value: CloudPipe
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+
+      LifecycleConfiguration:
+        Rules:
+          - Id: RemoveNoncurrentVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+
+          - Id: AbortIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+      VersioningConfiguration:
+        Status: Enabled
+
+      Tags:
+        - Key: Project
+          Value: CloudPipe
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  SiteOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Description: Signed CloudFront access to the private CloudPipe bucket.
+        Name: !Sub "${AWS::StackName}-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  SecurityHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${AWS::StackName}-security-headers"
+        Comment: Security headers for the CloudPipe static website.
+        SecurityHeadersConfig:
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: >-
+              default-src 'self';
+              script-src 'self';
+              style-src 'self';
+              img-src 'self' data:;
+              object-src 'none';
+              base-uri 'self';
+              frame-ancestors 'none';
+              form-action 'self';
+              upgrade-insecure-requests
+            Override: true
+
+          ContentTypeOptions:
+            Override: true
+
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: true
+            Preload: true
+
+          XSSProtection:
+            ModeBlock: true
+            Override: true
+            Protection: true
+
+  SiteDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: CloudPipe production static website.
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+
+        Origins:
+          - DomainName: !GetAtt SiteBucket.RegionalDomainName
+            Id: PrivateS3Origin
+            OriginAccessControlId: !GetAtt SiteOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          Compress: true
+          ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
+          TargetOriginId: PrivateS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ErrorCachingMinTTL: 60
+            ResponseCode: 404
+            ResponsePagePath: /error.html
+
+          - ErrorCode: 404
+            ErrorCachingMinTTL: 60
+            ResponseCode: 404
+            ResponsePagePath: /error.html
+
+        Restrictions:
+          GeoRestriction:
+            RestrictionType: none
+
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+      Tags:
+        - Key: Project
+          Value: CloudPipe
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action:
+              - s3:GetObject
+            Resource: !Sub "${SiteBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub >
+                  arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${SiteDistribution}
+
+  GitHubDeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: >
+        Short-lived deployment role assumable only by the immutable CloudPipe
+        GitHub repository identity on the main branch.
+      MaxSessionDuration: 3600
+
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudPipeMainBranch
+            Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProvider
+            Action:
+              - sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub >
+                  repo:${GitHubOwner}@${GitHubOwnerId}/${GitHubRepository}@${GitHubRepositoryId}:ref:refs/heads/${GitHubBranch}
+
+      Policies:
+        - PolicyName: DeployCloudPipeWebsite
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ListDeploymentBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource: !GetAtt SiteBucket.Arn
+
+              - Sid: SynchronizeWebsiteObjects
+                Effect: Allow
+                Action:
+                  - s3:DeleteObject
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${SiteBucket.Arn}/*"
+
+              - Sid: InvalidateCloudFrontCache
+                Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                Resource: !Sub >
+                  arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${SiteDistribution}
+
+      Tags:
+        - Key: Project
+          Value: CloudPipe
+        - Key: Environment
+          Value: Production
+        - Key: ManagedBy
+          Value: CloudFormation
+
+Outputs:
+  SiteBucketName:
+    Description: Private S3 deployment bucket.
+    Value: !Ref SiteBucket
+
+  CloudFrontDistributionId:
+    Description: CloudFront distribution identifier used for invalidations.
+    Value: !Ref SiteDistribution
+
+  CloudFrontDomainName:
+    Description: CloudFront production domain.
+    Value: !GetAtt SiteDistribution.DomainName
+
+  WebsiteUrl:
+    Description: HTTPS website URL.
+    Value: !Join
+      - ""
+      - - "https://"
+        - !GetAtt SiteDistribution.DomainName
+
+  GitHubDeploymentRoleArn:
+    Description: IAM role assumed by GitHub Actions through OIDC.
+    Value: !GetAtt GitHubDeploymentRole.Arn
+
+  GitHubOidcProviderArn:
+    Description: GitHub Actions OIDC provider created by this stack.
+    Value: !Ref GitHubOidcProvider
