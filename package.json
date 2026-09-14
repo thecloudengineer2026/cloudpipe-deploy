@@ -1,0 +1,27 @@
+{
+  "name": "cloudpipe-deploy",
+  "version": "1.0.0",
+  "description": "Secure static website delivery through GitHub Actions, AWS S3, CloudFront, and CloudFormation.",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "npm run validate",
+    "validate:html": "html-validate website/**/*.html",
+    "validate:css": "stylelint website/**/*.css",
+    "validate:js": "node --check website/js/app.js",
+    "validate": "npm run validate:html && npm run validate:css && npm run validate:js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "html-validate": "11.15.0",
+    "stylelint": "17.15.0",
+    "stylelint-config-standard": "40.0.0"
+  },
+  "engines": {
+    "node": "22.x"
+  },
+  "private": true
+}

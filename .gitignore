@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Generated deployment artifacts
+dist/
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor settings
+.vscode/
+.idea/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Test and validation output
+coverage/
+reports/
+
+# Local infrastructure output
+infrastructure/outputs.json
