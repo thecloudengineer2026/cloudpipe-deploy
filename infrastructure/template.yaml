@@ -218,7 +218,7 @@ Resources:
             Resource: !Sub "${SiteBucket.Arn}/*"
             Condition:
               StringEquals:
-                AWS:SourceArn: !Sub >
+                AWS:SourceArn: !Sub >-
                   arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${SiteDistribution}
 
   GitHubDeploymentRole:
@@ -241,7 +241,7 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub >
+                token.actions.githubusercontent.com:sub: !Sub >-
                   repo:${GitHubOwner}@${GitHubOwnerId}/${GitHubRepository}@${GitHubRepositoryId}:ref:refs/heads/${GitHubBranch}
 
       Policies:
@@ -268,7 +268,7 @@ Resources:
                 Effect: Allow
                 Action:
                   - cloudfront:CreateInvalidation
-                Resource: !Sub >
+                Resource: !Sub >-
                   arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${SiteDistribution}
 
       Tags:

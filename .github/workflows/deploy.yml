@@ -65,7 +65,7 @@ jobs:
           AWS_DEPLOYMENT_ROLE_ARN: ${{ vars.AWS_DEPLOYMENT_ROLE_ARN }}
 
       - name: Configure short-lived AWS credentials
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        uses: aws-actions/configure-aws-credentials@v6.2.4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOYMENT_ROLE_ARN }}
           role-session-name: CloudPipeGitHubDeployment
