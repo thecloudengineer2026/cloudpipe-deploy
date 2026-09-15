@@ -1,0 +1,126 @@
+name: Deploy website
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "website/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".htmlvalidate.json"
+      - ".stylelintrc.json"
+      - ".nvmrc"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: cloudpipe-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Validate and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      SITE_BUCKET_NAME: ${{ vars.SITE_BUCKET_NAME }}
+      CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+      WEBSITE_URL: ${{ vars.WEBSITE_URL }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
+      - name: Validate website
+        run: npm run validate
+
+      - name: Confirm deployment configuration
+        shell: bash
+        run: |
+          : "${AWS_REGION:?AWS_REGION repository variable is required}"
+          : "${SITE_BUCKET_NAME:?SITE_BUCKET_NAME repository variable is required}"
+          : "${CLOUDFRONT_DISTRIBUTION_ID:?CLOUDFRONT_DISTRIBUTION_ID repository variable is required}"
+          : "${WEBSITE_URL:?WEBSITE_URL repository variable is required}"
+          : "${AWS_DEPLOYMENT_ROLE_ARN:?AWS_DEPLOYMENT_ROLE_ARN repository variable is required}"
+        env:
+          AWS_DEPLOYMENT_ROLE_ARN: ${{ vars.AWS_DEPLOYMENT_ROLE_ARN }}
+
+      - name: Configure short-lived AWS credentials
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOYMENT_ROLE_ARN }}
+          role-session-name: CloudPipeGitHubDeployment
+          aws-region: ${{ vars.AWS_REGION }}
+          role-duration-seconds: 900
+          mask-aws-account-id: true
+          output-credentials: false
+          unset-current-credentials: true
+
+      - name: Synchronize website files
+        run: |
+          aws s3 sync website/ "s3://${SITE_BUCKET_NAME}" \
+            --delete \
+            --only-show-errors \
+            --cache-control "public,max-age=300"
+
+      - name: Invalidate CloudFront cache
+        id: invalidate
+        shell: bash
+        run: |
+          invalidation_id="$(
+            aws cloudfront create-invalidation \
+              --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
+              --paths "/*" \
+              --query "Invalidation.Id" \
+              --output text
+          )"
+
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
+            --id "${invalidation_id}"
+
+          echo "invalidation_id=${invalidation_id}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify production website
+        shell: bash
+        run: |
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --retry 5 \
+            --retry-all-errors \
+            --retry-delay 10 \
+            "${WEBSITE_URL}" \
+            > /dev/null
+
+      - name: Record deployment summary
+        shell: bash
+        run: |
+          {
+            echo "## CloudPipe production deployment"
+            echo ""
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Website: ${WEBSITE_URL}"
+            echo "- CloudFront invalidation: \`${{ steps.invalidate.outputs.invalidation_id }}\`"
+            echo "- Result: validated and deployed successfully"
+          } >> "${GITHUB_STEP_SUMMARY}"
